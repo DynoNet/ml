@@ -58,7 +58,7 @@ def get_general_info():
 def get_all_climbs(min_ascents):
    conn = sqlite3.connect(path)
    cursor = conn.cursor()
-   cursor.execute("SELECT cs.climb_uuid, cs.angle, cs.difficulty_average, cs.ascensionist_count, c.frames, c.name, c.setter_username FROM climb_stats cs JOIN climbs c ON cs.climb_uuid = c.uuid WHERE cs.ascensionist_count >= ? AND c.layout_id = 1;", (min_ascents,))
+   cursor.execute("SELECT cs.climb_uuid, cs.angle, cs.difficulty_average, cs.ascensionist_count, c.frames FROM climb_stats cs JOIN climbs c ON cs.climb_uuid = c.uuid WHERE cs.ascensionist_count >= ? AND c.layout_id = 1;", (min_ascents,))
    climbs = cursor.fetchall()
    conn.close()
    return climbs
