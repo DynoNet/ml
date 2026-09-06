@@ -28,3 +28,19 @@ class PositionalEncoding(nn.Module):
         seq_len = sequence_tensor.size(1)
         #again broadcasting at play in order for this addition to work
         return sequence_tensor + self.sin_pos_enc[:, :seq_len, :]
+
+class HoldEmbedding(nn.Module):
+    def __init__(self, d_model, num_x, num_y, num_r):
+        super().__init__()
+        self.x_lk_t = nn.Embedding(num_x, d_model)
+        self.y_lk_t = nn.Embedding(num_y, d_model)
+        self.r_lk_t = nn.Embedding(num_r, d_model)
+    
+    def forward(self, x):
+        # x shape: (batch_size, seq_len, 3)
+        x_emb = self.x_lk_t(x[:, :, 0].long())
+        y_emb = self.y_lk_t(x[:, :, 1].long())
+        r_emb = self.r_lk_t(x[:, :, 2].long())
+
+        return x_emb + y_emb + r_emb
+
