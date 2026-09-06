@@ -35,7 +35,7 @@ def _build_placement_lookup(conn):
     return lookup
 
 
-def get_tensors_from_climbs(min_ascents=50, max_holds=30):
+def get_tensors_from_climbs(min_ascents=50, max_holds=40):
     conn = sqlite3.connect(path)
 
     placement_lookup = _build_placement_lookup(conn)
