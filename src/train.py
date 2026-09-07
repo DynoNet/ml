@@ -101,7 +101,10 @@ if __name__ == "__main__":
     # max_r = all_input[:, :, 2].max().item()
     #
     # print(f"Max X: {max_x}, Max Y: {max_y}, Max Role: {max_r}")
+    
+    # Max X: 35.0, Max Y: 38.0, Max Role: 5.0
 
+    #TODO change this to 39 and train again
     model = Model(36, 45, 6).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
