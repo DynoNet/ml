@@ -21,15 +21,12 @@ class KilterDataset(Dataset):
         seq = self.sequences[idx]
 
         # 2. Autoregressive target shift
+        #TODO Read more about this one
         input_seq = seq[:-1]  # Tokens 0 to N-1
         target_seq = seq[1:]  # Tokens 1 to N
-
-        # 3. Create boolean padding mask (True where input role == 0)
-        padding_mask = input_seq[:, 2] == 0
 
         return {
             "input_seq": input_seq,
             "target_seq": target_seq.long(),
-            "padding_mask": padding_mask,
         }
 

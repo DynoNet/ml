@@ -67,9 +67,11 @@ def get_tensors_from_climbs(min_ascents=50, max_holds=40):
             x, y = placement_lookup[p_id]
             mapped_role = ROLE_MAP[r_id]
 
-            # if x < 0 or x > 144 or y > 38:
-            #   out_of_bounds = True
-            #   break
+            #TODO: Check if this approach actually filters the climbs as you want (check manually a lot of random climbs and see their layout
+            #Because in theory you could have smaller or different board layout that still fit this and fuck up the data
+            if x < 1 or x > 35 or y < 1 or y > 38:
+                out_of_bounds = True
+                break
 
             holds.append([x, y, mapped_role])
 
@@ -92,12 +94,14 @@ def get_tensors_from_climbs(min_ascents=50, max_holds=40):
     return dataset
 
 
-def save_dataset():
+def save_dataset(dataset):
     torch.save(dataset, "/home/tudor/Code/DynoNet/data/processed/dataset.pt")
 
 
 if __name__ == "__main__":
-    dataset = get_tensors_from_climbs(25, 30)
+    dataset = get_tensors_from_climbs(25, 35)
+    save_dataset(dataset)
+
     for i, sequence in enumerate(dataset[:10]):
         print(f"=== Climb {i + 1} ===")
         active_tokens = [token for token in sequence if token != [0, 0, 0]]
