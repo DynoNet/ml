@@ -48,17 +48,18 @@ class HoldEmbedding(nn.Module):
         return x_emb + y_emb + r_emb
 
 class Model(nn.Module):
-    def __init__(self, vocab_x, vocab_y, vocab_r, d_model = 128, nhead = 8, num_layers = 4):
+    def __init__(self, vocab_x, vocab_y, vocab_r, d_model=128, nhead=8, num_layers=4):
         super().__init__()
         self.embedding = HoldEmbedding(d_model, vocab_x, vocab_y, vocab_r)
         self.meta_proj = nn.Linear(2, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
 
-        layer = nn.TransformerDecoderLayer(d_model, nhead, 512, batch_first=True)
-        self.decoder = nn.TransformerDecoder(layer, num_layers)
+        # Use EncoderLayer instead of Decoder for causal language modeling
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model, nhead, dim_feedforward=512, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
 
-        #TODO recap how these work
-        #How can you reproject the output of the decoder on these?
         self.x_ll = nn.Linear(d_model, vocab_x)
         self.y_ll = nn.Linear(d_model, vocab_y)
         self.r_ll = nn.Linear(d_model, vocab_r)
@@ -72,12 +73,19 @@ class Model(nn.Module):
         meta_emb = self.meta_proj(meta).unsqueeze(1)
 
         complete_tensor = torch.cat([meta_emb, hold_emb], dim=1)
-
         complete_tensor = self.pos_encoder(complete_tensor)
 
-        causal_mask = nn.Transformer.generate_square_subsequent_mask(complete_tensor.size(1), device=complete_tensor.device)
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(
+            complete_tensor.size(1), device=complete_tensor.device
+        )
 
-        out = self.decoder(complete_tensor, complete_tensor, tgt_mask=causal_mask, tgt_key_padding_mask=padding_mask)
+        # Single causal transformer pass
+        out = self.transformer(
+            complete_tensor, 
+            mask=causal_mask, 
+            src_key_padding_mask=padding_mask,
+            is_causal=True
+        )
 
         return self.x_ll(out), self.y_ll(out), self.r_ll(out)
 
