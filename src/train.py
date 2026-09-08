@@ -1,128 +1,103 @@
-import dataloader
-from model import Model
-import torch
 import time
+import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
+import dataloader
+from model import Model, encode_hold
 
-def train_one_epoch(train_loader: DataLoader, model:Model, optimizer, device):
-    running_loss = 0
 
-    # sets dropout and batch norm
+def train_one_epoch(train_loader: DataLoader, model: Model, optimizer, loss_criterion, device):
+    running_loss = 0.0
     model.train()
-    
-    #loss computation
-    loss_criterion = nn.CrossEntropyLoss(ignore_index = 0)
 
     for batch in train_loader:
-
         input_seq = batch["input_seq"].to(device)
         target_seq = batch["target_seq"].to(device)
 
-        #unpack the meta from the sequence
         meta_batch = input_seq[:, 0, :2]
         hold_batch = input_seq[:, 1:, :]
 
-        #pass input_seq to the model
-        x_hat, y_hat, r_hat = model(meta_batch, hold_batch)
+        logits = model(meta_batch, hold_batch)
 
-        #recieve 3 heads and compare to target_seq
-        x = target_seq[:, :, 0]
-        y = target_seq[:, :, 1]
-        r = target_seq[:, :, 2]
+        x_target = target_seq[:, :, 0]
+        y_target = target_seq[:, :, 1]
+        r_target = target_seq[:, :, 2]
+        target_tokens = encode_hold(x_target, y_target, r_target, model.vocab_y, model.vocab_r)
 
-        x_hat = x_hat.reshape(-1, x_hat.size(-1))
-        y_hat = y_hat.reshape(-1, y_hat.size(-1))
-        r_hat = r_hat.reshape(-1, r_hat.size(-1))
+        # No slicing. logits and target_tokens are already perfectly aligned (B, seq_len)
+        loss = loss_criterion(
+            logits.reshape(-1, model.vocab_size),
+            target_tokens.reshape(-1)
+        )
 
-        x = x.reshape(-1)
-        y = y.reshape(-1)
-        r = r.reshape(-1)
-
-
-        total_loss = loss_criterion(x_hat, x) + loss_criterion(y_hat, y) + loss_criterion(r_hat, r)
-        running_loss = running_loss + total_loss.item()
-        #backwards pass & optimizer
-        #optimizer
         optimizer.zero_grad()
-        total_loss.backward()
+        loss.backward()
         optimizer.step()
+
+        running_loss += loss.item()
 
     return running_loss / len(train_loader)
 
-    
-def validate(val_loader: DataLoader, model:Model, device):    
-    running_loss = 0
 
-    # sets dropout and batch norm
+@torch.no_grad()
+def validate(val_loader: DataLoader, model: Model, loss_criterion, device):
+    running_loss = 0.0
     model.eval()
-    
-    #loss computation
-    loss_criterion = nn.CrossEntropyLoss(ignore_index = 0)
-    with torch.no_grad():
-        for batch in val_loader:
 
-                input_seq = batch["input_seq"].to(device)
-                target_seq = batch["target_seq"].to(device)
+    for batch in val_loader:
+        input_seq = batch["input_seq"].to(device)
+        target_seq = batch["target_seq"].to(device)
 
-                #unpack the meta from the sequence
-                meta_batch = input_seq[:, 0, :2]
-                hold_batch = input_seq[:, 1:, :]
+        meta_batch = input_seq[:, 0, :2]
+        hold_batch = input_seq[:, 1:, :]
 
-                #pass input_seq to the model
-                x_hat, y_hat, r_hat = model(meta_batch, hold_batch)
+        logits = model(meta_batch, hold_batch)
 
-                #recieve 3 heads and compare to target_seq
-                x = target_seq[:, :, 0]
-                y = target_seq[:, :, 1]
-                r = target_seq[:, :, 2]
+        x_target = target_seq[:, :, 0]
+        y_target = target_seq[:, :, 1]
+        r_target = target_seq[:, :, 2]
+        target_tokens = encode_hold(x_target, y_target, r_target, model.vocab_y, model.vocab_r)
 
-                x_hat = x_hat.reshape(-1, x_hat.size(-1))
-                y_hat = y_hat.reshape(-1, y_hat.size(-1))
-                r_hat = r_hat.reshape(-1, r_hat.size(-1))
-
-                x = x.reshape(-1)
-                y = y.reshape(-1)
-                r = r.reshape(-1)
-
-
-                total_loss = loss_criterion(x_hat, x) + loss_criterion(y_hat, y) + loss_criterion(r_hat, r)
-                running_loss = running_loss + total_loss.item()
+        loss = loss_criterion(
+            logits.reshape(-1, model.vocab_size),
+            target_tokens.reshape(-1)
+        )
+        running_loss += loss.item()
 
     return running_loss / len(val_loader)
 
+
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_ldr, validate_ldr, test_ldr = dataloader.get_dataloaders("/home/tudor/Code/DynoNet/data/processed/dataset.pt") 
-    
-    # all_input = train_ldr.dataset[:]["input_seq"]
-    # max_x = all_input[:, :, 0].max().item()
-    # max_y = all_input[:, :, 1].max().item()
-    # max_r = all_input[:, :, 2].max().item()
-    #
-    # print(f"Max X: {max_x}, Max Y: {max_y}, Max Role: {max_r}")
-    
-    # Max X: 35.0, Max Y: 38.0, Max Role: 5.0
+    train_ldr, validate_ldr, _ = dataloader.get_dataloaders("/home/tudor/Code/DynoNet/data/processed/dataset.pt")
 
-    #TODO change this to 39 and train again
-    model = Model(36, 45, 6).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    num_epochs = 60
+    initial_lr = 1e-3
+    min_lr = 1e-6
 
+    model = Model(vocab_x=36, vocab_y=45, vocab_r=6).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=1e-2)
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=num_epochs, eta_min=min_lr
+    )
+
+    loss_criterion = nn.CrossEntropyLoss(ignore_index=0)
     best_val_loss = float("inf")
-    num_epochs = 20
 
-    print(f"Training on device: {device}\n")
+    print(f"Training on device: {device} for {num_epochs} epochs\n")
 
     for epoch in range(num_epochs):
         start_time = time.time()
 
-        train_loss = train_one_epoch(train_ldr, model, optimizer, device)
-        val_loss = validate(validate_ldr, model, device)
+        train_loss = train_one_epoch(train_ldr, model, optimizer, loss_criterion, device)
+        val_loss = validate(validate_ldr, model, loss_criterion, device)
+
+        scheduler.step()
 
         epoch_time = time.time() - start_time
         current_lr = optimizer.param_groups[0]["lr"]
 
-        # Checkpoint if validation loss improves
         saved_tag = ""
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -133,7 +108,7 @@ if __name__ == "__main__":
             f"Epoch {epoch + 1:02d}/{num_epochs:02d} | "
             f"Train Loss: {train_loss:.4f} | "
             f"Val Loss: {val_loss:.4f} | "
-            f"LR: {current_lr:.1e} | "
+            f"LR: {current_lr:.2e} | "
             f"Time: {epoch_time:.2f}s"
             f"{saved_tag}"
         )
