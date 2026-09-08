@@ -2,11 +2,22 @@ import math
 import torch
 import torch.nn as nn
 
+# see Mixed-Radix Number System
+def encode_hold(x: torch.Tensor, y: torch.Tensor, r: torch.Tensor, vocab_y: int = 39, vocab_r: int = 6) -> torch.Tensor:
+    return x * vocab_y * vocab_r + y * vocab_r + r
+
+def decode_token(token_id: int, vocab_y: int, vocab_r: int) -> tuple[int, int, int]:
+    r = token_id % vocab_r
+    y = (token_id - r) // vocab_r % vocab_y
+    x = (token_id - r - y * vocab_r) // (vocab_r * vocab_y)
+
+    return x, y, r
+
 class PositionalEncoding(nn.Module):
     # Type annotation for static analyzers
     sin_pos_enc: torch.Tensor     
 
-    def __init__(self, d_model, max_len=41):
+    def __init__(self, d_model: int = 128, max_len: int = 41):
         super().__init__()
         positional_encodings = torch.zeros(max_len, d_model)
         sequence_step_indeces = torch.arange(start=0, end=max_len, step=1, dtype=torch.float)
@@ -32,53 +43,48 @@ class PositionalEncoding(nn.Module):
         #again broadcasting at play in order for this addition to work
         return sequence_tensor + self.sin_pos_enc[:, :seq_len, :]
 
-class HoldEmbedding(nn.Module):
-    def __init__(self, d_model, num_x, num_y, num_r):
-        super().__init__()
-        self.x_lk_t = nn.Embedding(num_x, d_model)
-        self.y_lk_t = nn.Embedding(num_y, d_model)
-        self.r_lk_t = nn.Embedding(num_r, d_model)
-    
-    def forward(self, x):
-        # x shape: (batch_size, seq_len, 3)
-        x_emb = self.x_lk_t(x[:, :, 0].long())
-        y_emb = self.y_lk_t(x[:, :, 1].long())
-        r_emb = self.r_lk_t(x[:, :, 2].long())
-
-        return x_emb + y_emb + r_emb
-
 class Model(nn.Module):
-    def __init__(self, vocab_x, vocab_y, vocab_r, d_model = 128, nhead = 8, num_layers = 4):
+    def __init__(self, vocab_x: int = 36, vocab_y: int = 39, vocab_r: int = 6, d_model: int = 128):
         super().__init__()
-        self.embedding = HoldEmbedding(d_model, vocab_x, vocab_y, vocab_r)
+        self.embedding = nn.Embedding(vocab_x * vocab_y * vocab_r, d_model, padding_idx=0)
+        self.vocab_x = vocab_x
+        self.vocab_y = vocab_y
+        self.vocab_r = vocab_r
+        self.total_vocab = vocab_x * vocab_y * vocab_r
+        #TODO change to 3 when we implement climb types (see to do for details)
         self.meta_proj = nn.Linear(2, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
 
-        layer = nn.TransformerDecoderLayer(d_model, nhead, 512, batch_first=True)
-        self.decoder = nn.TransformerDecoder(layer, num_layers)
+        encoder_layer = nn.TransformerEncoderLayer(d_model, 8, 512, 0.1, "gelu", batch_first=True, norm_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, 4, nn.LayerNorm(d_model))
 
-        #TODO recap how these work
-        #How can you reproject the output of the decoder on these?
-        self.x_ll = nn.Linear(d_model, vocab_x)
-        self.y_ll = nn.Linear(d_model, vocab_y)
-        self.r_ll = nn.Linear(d_model, vocab_r)
+        self.logit = nn.Linear(d_model, self.total_vocab)
 
-    def forward(self, meta, holds):
-        padding_mask = (holds[:, :, 2] == 0)
-        meta_mask = torch.zeros(padding_mask.size(0), 1, dtype=torch.bool, device=padding_mask.device)
-        padding_mask = torch.cat([meta_mask, padding_mask], dim=1)
+    def _to_token_ids(self, holds: torch.Tensor) -> torch.Tensor:
+        if holds.dim() == 3:
+            x = holds[:, :, 0].long()
+            y = holds[:, :, 1].long()
+            r = holds[:, :, 2].long()
+            return encode_hold(x, y, r, self.vocab_y, self.vocab_r)
+        return holds.long()
 
-        hold_emb = self.embedding(holds)
-        meta_emb = self.meta_proj(meta).unsqueeze(1)
+    def forward(self, meta: torch.Tensor, holds: torch.Tensor):
+        ids = self._to_token_ids(holds)
+        holds_projs = self.embedding(ids)
+        meta_projs = self.meta_proj(meta).unsqueeze(1)
 
-        complete_tensor = torch.cat([meta_emb, hold_emb], dim=1)
+        tokens = torch.cat([meta_projs, holds_projs], 1)
 
-        complete_tensor = self.pos_encoder(complete_tensor)
+        pe_tokens = self.pos_encoder(tokens)
+        
+        padding_mask = ids == 0
+        meta_padding_mask = torch.zeros(padding_mask.size(0), 1, dtype=torch.bool, device=padding_mask.device)
+        padding_mask = torch.cat([meta_padding_mask, padding_mask], dim=1)
 
-        causal_mask = nn.Transformer.generate_square_subsequent_mask(complete_tensor.size(1), device=complete_tensor.device)
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(tokens.size(1), device=tokens.device)
 
-        out = self.decoder(complete_tensor, complete_tensor, tgt_mask=causal_mask, tgt_key_padding_mask=padding_mask)
+        output = self.transformer(pe_tokens, mask=causal_mask, src_key_padding_mask = padding_mask, is_causal=True)
 
-        return self.x_ll(out), self.y_ll(out), self.r_ll(out)
+        return self.logit(output)
 
-
+       
