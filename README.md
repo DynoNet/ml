@@ -1,7 +1,8 @@
 # DynoNet
-deep learning route generator for the Kilter Board.
-
 An autoregressive Transformer model in PyTorch that generates custom climbing routes for the standard 12x12 Original Kilter Board layout, conditioned on wall angle and difficulty grade.
+
+On the right side we see the generated 6a+/V3 climb at 45 degrees.
+<img width="1600" height="900" alt="image" src="https://github.com/user-attachments/assets/0fb45a2b-3b71-4744-b3c8-f4a4631e964c" />
 
 ---
 
